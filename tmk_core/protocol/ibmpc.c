@@ -136,6 +136,7 @@ int16_t ibmpc_host_send(uint8_t data)
     wait_us(15);
     data_hi();
     WAIT(clock_hi, 50, 6);
+    // Zenith Z-150 AT doesn't have 11th clock for ACK.
     if (ibmpc_protocol == IBMPC_PROTOCOL_AT_Z150) { goto RECV; }
     WAIT(clock_lo, 50, 7);
 
@@ -156,6 +157,11 @@ RECV:
     return ibmpc_host_recv_response();
 ERROR:
     ibmpc_error |= IBMPC_ERR_SEND;
+
+    // This error can happen before protocol recognition of Zenith Z-150 AT.
+    // https://github.com/tmk/tmk_keyboard/wiki/IBM-PC-AT-Keyboard-Protocol#zenith-z-150-beige
+    if (!ibmpc_protocol && ibmpc_error == 7) { goto RECV; }
+
     idle();
     IBMPC_INT_ON();
     return -1;
