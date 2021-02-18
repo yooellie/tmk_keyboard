@@ -50,6 +50,11 @@ static int16_t read_wait(uint16_t wait_ms)
     return code;
 }
 
+#define ID_STR(id)  (id == 0xFFFE ? "_????" : \
+                    (id == 0xFFFD ? "_Z150" : \
+                    (id == 0x0000 ? "_AT84" : \
+                     "")))
+
 static uint16_t read_keyboard_id(void)
 {
     uint16_t id = 0;
@@ -169,8 +174,6 @@ uint8_t matrix_scan(void)
 
     switch (state) {
         case INIT:
-            ibmpc_host_disable();
-
             xprintf("I%u ", timer_read());
             keyboard_kind = NONE;
             keyboard_id = 0x0000;
@@ -183,17 +186,22 @@ uint8_t matrix_scan(void)
             state = WAIT_SETTLE;
             break;
         case WAIT_SETTLE:
+            // Omit reset process when AA comes
+            if (0xAA == ibmpc_host_recv()) {
+                xprintf("AA%u ", timer_read());
+                init_time = timer_read();
+                state = WAIT_AABF;
+            }
+
             // wait for keyboard to settle after plugin
-            if (timer_elapsed(init_time) > 1000) {
+            if (timer_elapsed(init_time) > 3000) {
                 state = AT_RESET;
             }
             break;
         case AT_RESET:
-            ibmpc_host_isr_clear();
-            ibmpc_host_enable();
-            wait_ms(1); // keyboard can't respond to command without this
+            xprintf("A%u ", timer_read());
 
-            // SKIDATA-2-DE(and some other keyboards?) stores 'Code Set' setting in nonvlatile memory
+            // SKIDATA-2-DE(and some other keyboards?) stores 'Code Set' setting in nonvolatile memory
             // and keeps it until receiving reset. Sending reset here may be useful to clear it, perhaps.
             // https://github.com/tmk/tmk_keyboard/wiki/IBM-PC-AT-Keyboard-Protocol#select-alternate-scan-codesf0
 
@@ -203,7 +211,6 @@ uint8_t matrix_scan(void)
             } else {
                 state = XT_RESET;
             }
-            xprintf("A%u ", timer_read());
             break;
         case XT_RESET:
             // Reset XT-initialize keyboard
@@ -281,7 +288,7 @@ uint8_t matrix_scan(void)
             } else if (0xFFFE == keyboard_id) {     // CodeSet2 PS/2 fails to response?
                 keyboard_kind = PC_AT;
             } else if (0xFFFD == keyboard_id) {     // Zenith Z-150 AT
-                keyboard_kind = PC_AT_Z150;
+                keyboard_kind = PC_AT;
             } else if (0x00FF == keyboard_id) {     // Mouse is not supported
                 xprintf("Mouse: not supported\n");
                 keyboard_kind = NONE;
@@ -312,7 +319,7 @@ uint8_t matrix_scan(void)
                 keyboard_kind = PC_AT;
             }
 
-            xprintf("\nID:%04X(%s) ", keyboard_id, KEYBOARD_KIND_STR(keyboard_kind));
+            xprintf("\nID:%04X(%s%s) ", keyboard_id, KEYBOARD_KIND_STR(keyboard_kind), ID_STR(keyboard_id));
 
             state = SETUP;
             break;
@@ -322,10 +329,9 @@ uint8_t matrix_scan(void)
                 case PC_XT:
                     break;
                 case PC_AT:
+                    // TODO: led_set() works for Zenith Z-150 AT?
+                    if (ibmpc_protocol == IBMPC_PROTOCOL_AT_Z150) break;
                     led_set(host_keyboard_leds());
-                    break;
-                case PC_AT_Z150:
-                    // TODO: do not set indicators temporarily for debug
                     break;
                 case PC_TERMINAL:
                     // Set all keys to make/break type
@@ -364,7 +370,6 @@ uint8_t matrix_scan(void)
                         if (process_cs1(code) == -1) state = INIT;
                         break;
                     case PC_AT:
-                    case PC_AT_Z150:
                         if (process_cs2(code) == -1) state = INIT;
                         break;
                     case PC_TERMINAL:
